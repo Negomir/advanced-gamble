@@ -4,16 +4,52 @@ import json
 
 ## Case
 
+def SortFunc(e):
+    return e.weight
+
+class CaseManager:
+    def __init__(self, file):
+        self.file = os.path.join(os.path.dirname(__file__), file)
+        self.cases = []
+        self.max = 0
+
+    def ReadCases(self):
+        json_file = open(self.file)
+        cases = json.load(json_file)
+        Parent.Log(ScriptName, str(cases))
+        
+        i = 0
+        for case in cases:
+            self.cases.append(Case(**cases[case]))
+            self.max += self.cases[i].weight
+            i += 1
+            
+        self.Sort()
+            
+    def WriteCases(self):
+        data = dict()
+        
+        for i in range(len(self.cases)):
+            data[self.cases[i].name] = self.cases[i].__dict__
+        
+        with open(self.file, 'w') as file:
+            json.dump(data, file, indent=4)
+            
+    def AddCase(self, case):
+        self.cases.append(case)
+        self.max += case.weight
+        self.Sort()
+        self.WriteCases()
+        
+    def Sort(self):
+        self.cases.sort(key=SortFunc)
+
 class Case:
-    def __init__(self, name, amount, range_start, range_end, multiplier):
+    def __init__(self, name, amount, weight, multiplier):
         self.name = name
         self.amount = amount
-        self.range_start = range_start
-        self.range_end = range_end
+        self.weight = weight
         self.multiplier = multiplier
-        
-    def InCase(self, val):
-        return self.range_start <= val and val <= self.range_end
 
 ## Reward
 
@@ -44,9 +80,6 @@ class Settings:
             self.gamble_command = "!gamble"
             self.win_threshold = 60
             self.win_multiplier = 1
-            #Jackpot Case
-            self.jackpot = Case("jackpot", 69, 100, 100, 1)
-            self.jackpot_command = "!" + self.jackpot.name
             #Cooldown
             self.command_permission = "Everyone"
             self.is_global_cooldown_on = False
@@ -77,27 +110,25 @@ settings = None
 def DoGamble(Parent, data):
     global settings
     
-    try:
-        amount = 0
-        amount_string = data.GetParam(1).lower()
-        
-        if "-" in amount_string:
+    if data.User == "negomir99" or data.User == settings.streamer or Parent.HasPermission(data.User, settings.command_permission, ""):
+        try:
+            amount = 0
+            amount_string = data.GetParam(1).lower()
+            
+            if "-" in amount_string:
+                return
+            
+            if amount_string == "all":
+                amount = Parent.GetPoints(data.User)
+            elif "%" in amount_string:
+                perc = float(amount_string.split('%')[0]) / 100
+                amount = int(Parent.GetPoints(data.User) * perc)
+            else:
+                amount = int(amount_string)
+        except:
+            Parent.Log(ScriptName, "error parsing gamble amount")
             return
         
-        if amount_string == "all":
-            amount = Parent.GetPoints(data.User)
-        elif "%" in amount_string:
-            perc = float(amount_string.split('%')[0]) / 100
-            amount = int(Parent.GetPoints(data.User) * perc)
-        else:
-            amount = int(amount_string)
-    except:
-        Parent.Log(ScriptName, "error parsing gamble amount")
-        return
-    
-    Parent.Log(ScriptName, str(amount))
-    
-    if data.User == "negomir99" or data.User == settings.streamer or Parent.HasPermission(data.User, settings.command_permission, ""):
         val = Parent.GetRandom(0, 100)
         reward = GetReward(val, amount)
         reward.Apply(Parent, data.UserName)
@@ -113,16 +144,7 @@ def DoGamble(Parent, data):
 def GetReward(val, gamble_amount):
     global settings
     
-    if settings.jackpot.InCase(val):
-        jpot = settings.jackpot.amount
-        settings.jackpot.amount = 0
-        return Reward(settings.jackpot.name, val, jpot, settings.jackpot.multiplier)
-        
-    if val >= settings.win_threshold:
-        return Reward("win", val, gamble_amount, settings.win_multiplier)
-    
-    settings.jackpot.amount += gamble_amount
-    return Reward("loss", val, gamble_amount, -1)
+    return Reward("win", val, gamble_amount, 1)
 
 def SendResponse(Parent, data, reward):
     global settings
@@ -169,6 +191,8 @@ def PointsWithCurrency(Parent, data):
 def Init():
     global settings
     settings = Settings()
+    cm = CaseManager("cases.json")
+    cm.ReadCases()
     return
 
 #Exec is a function called every time the bot gets a chat message
@@ -180,8 +204,8 @@ def Execute(data):
     if not settings.only_live or Parent.IsLive():
         if data.IsChatMessage() and data.GetParam(0).lower() == settings.gamble_command:
             DoGamble(Parent, data)
-        elif data.IsChatMessage() and data.GetParam(0).lower() == settings.jackpot_command:
-            Parent.SendStreamMessage(str(settings.jackpot.amount))
+        #elif data.IsChatMessage() and data.GetParam(0).lower() == settings.jackpot_command:
+        #    Parent.SendStreamMessage(str(settings.jackpot.amount))
     return
 
 #Tick is called once every millisecond
