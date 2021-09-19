@@ -1,98 +1,16 @@
 import os
 import sys
 import json
+import imp
 
-## Case
+## Consts
 
-def SortFunc(e):
-    return e.weight
+ROOT_DIR = os.path.dirname(__file__)
+SETTINGS_DIR = os.path.join(ROOT_DIR, "settings")
+CONFIG_FILE = os.path.join(ROOT_DIR, "config.json")
+OUTCOMES_DIR = os.path.join(ROOT_DIR, "outcomes")
+OUTCOMES_FILE = os.path.join(OUTCOMES_DIR, "outcomes.json")
 
-class CaseManager:
-    def __init__(self, file):
-        self.file = os.path.join(os.path.dirname(__file__), file)
-        self.cases = []
-        self.max = 0
-
-    def ReadCases(self):
-        json_file = open(self.file)
-        cases = json.load(json_file)
-        Parent.Log(ScriptName, str(cases))
-        
-        i = 0
-        for case in cases:
-            self.cases.append(Case(**cases[case]))
-            self.max += self.cases[i].weight
-            i += 1
-            
-        self.Sort()
-            
-    def WriteCases(self):
-        data = dict()
-        
-        for i in range(len(self.cases)):
-            data[self.cases[i].name] = self.cases[i].__dict__
-        
-        with open(self.file, 'w') as file:
-            json.dump(data, file, indent=4)
-            
-    def AddCase(self, case):
-        self.cases.append(case)
-        self.max += case.weight
-        self.Sort()
-        self.WriteCases()
-        
-    def Sort(self):
-        self.cases.sort(key=SortFunc)
-
-class Case:
-    def __init__(self, name, amount, weight, multiplier):
-        self.name = name
-        self.amount = amount
-        self.weight = weight
-        self.multiplier = multiplier
-
-## Reward
-
-class Reward:
-    def __init__(self, name, roll, amount, multiplier):
-        self.name = name
-        self.roll = roll
-        self.amount = amount
-        self.multiplier = multiplier
-        
-    def Apply(self, Parent, winner):
-        Parent.AddPoints(winner.lower(), winner, self.amount * self.multiplier)
-
-## Settings
-
-settingsFile = os.path.join(os.path.dirname(__file__), "settings.json")
-
-class Settings:
-    def __init__(self):
-        if settingsFile and os.path.isfile(settingsFile):
-            with codecs.open(settingsFile, encoding="utf-8-sig", mode="r") as f:
-                self.__dict__ = json.load(f, encoding="utf-8-sig")
-        else:
-            #Global
-            self.streamer = "negomir99"
-            self.only_live = False
-            #Base Gamble
-            self.gamble_command = "!gamble"
-            self.win_threshold = 60
-            self.win_multiplier = 1
-            #Cooldown
-            self.command_permission = "Everyone"
-            self.is_global_cooldown_on = False
-            self.global_cooldown = 0
-            self.is_user_cooldown_enabled = False
-            self.user_cooldown = 0
-            #Outputs
-            self.win_jackpot_message = "$username rolled $roll and WON THE JACKPOT!! They now have $pointswithcurrency"
-            self.win_message = "$username gambled $amount and rolled a $roll and won! They now have $pointswithcurrency"
-            self.lose_message = "$username gambled $amount and rolled a $roll and lost! They now have $pointswithcurrencyname"
-            self.not_enough_points_message = "$username you cannot gamble the points you don't have!"
-            self.unauthorized_message = "$username doesn't have the permission to do that!"
-            
 ## Chat Info
 
 ScriptName = "Advanced Gamble"
@@ -101,85 +19,99 @@ Description = "This is an extention of the gamble script, offering more options 
 Creator = "Negomir99"
 Version = "1.0.0.0"
 
+## Setup
+
+def ImportModules():
+    global settings, outcomes_manager
+    
+    # Settings
+    settings_module = imp.load_source("module.settings", os.path.join(SETTINGS_DIR, "settings.py"))
+    settings = settings_module.Settings(CONFIG_FILE)
+    
+    # Outcomes
+    outcomes_module = imp.load_source("module.outcomes", os.path.join(OUTCOMES_DIR, "outcomes.py"))
+    outcomes_manager = outcomes_module.OutcomesManager(OUTCOMES_FILE)
+
 ## Global Vars
 
 settings = None
+outcomes_manager = None
 
 ## My Functions
 
-def DoGamble(Parent, data):
-    global settings
+def DoGamble(data):
+    global settings, outcomes_manager
     
     if data.User == "negomir99" or data.User == settings.streamer or Parent.HasPermission(data.User, settings.command_permission, ""):
-        try:
-            amount = 0
-            amount_string = data.GetParam(1).lower()
-            
-            if "-" in amount_string:
-                return
-            
-            if amount_string == "all":
-                amount = Parent.GetPoints(data.User)
-            elif "%" in amount_string:
-                perc = float(amount_string.split('%')[0]) / 100
-                amount = int(Parent.GetPoints(data.User) * perc)
-            else:
-                amount = int(amount_string)
-        except:
-            Parent.Log(ScriptName, "error parsing gamble amount")
+        amount = ParseAmount(data)
+        if amount is None:
+            Parent.Log(ScriptName, "error parsing gamble amount. roll: " + str(amount))
             return
         
         val = Parent.GetRandom(0, 100)
-        reward = GetReward(val, amount)
-        reward.Apply(Parent, data.UserName)
-        SendResponse(Parent, data, reward)
+        outcome = outcomes_manager.GetOutcome(val)
+        if outcome is None:
+            Parent.Log(ScriptName, "error, outcome is None")
+            return
+        
+        ApplyOutcome(data, amount, outcome)
+        SendResponse(data, amount, value, outcome.message)
     else:
         output_message = settings.unauthorized_message
         
         output_message = output_message.replace("$username", data.UserName)
         output_message = output_message.replace("$user", data.User)
+        
+        Parent.SendStreamMessage(output_message)
     
     return
 
-def GetReward(val, gamble_amount):
-    global settings
-    
-    return Reward("win", val, gamble_amount, 1)
+def ParseAmount(data):
+    try:
+        amount = 0
+        param = data.GetParam(1).lower()
+        
+        if "-" in param:
+            Parent.Log(ScriptName, "error, negative")
+            return None
+        
+        if param == "all":
+            amount = Parent.GetPoints(data.User)
+        elif "%" in param:
+            perc = float(param.split('%')[0]) / 100
+            amount = int(Parent.GetPoints(data.User) * perc)
+        else:
+            amount = int(param)
+            
+        return amount
+    except:
+        return None
 
-def SendResponse(Parent, data, reward):
-    global settings
-    output_message = ""
+def ApplyOutcome(data, amount, outcome):
+    value = outcome.value + amount * outcome.multiplier
+    Parent.AddPoints(data.User, data.UserName, value)
     
-    if reward.name == "win":
-        output_message = settings.win_message
-        
-        output_message = output_message.replace("$username", data.UserName)
-        output_message = output_message.replace("$user", data.User)
-        output_message = output_message.replace("$roll", str(reward.roll))
-        output_message = output_message.replace("$amount", str(reward.amount))
-        output_message = output_message.replace("$pointswithcurrency", PointsWithCurrency(Parent, data))
-    elif reward.name == "loss":
-        output_message = settings.lose_message
-         
-        output_message = output_message.replace("$username", data.UserName)
-        output_message = output_message.replace("$user", data.User)
-        output_message = output_message.replace("$roll", str(reward.roll))
-        output_message = output_message.replace("$amount", str(reward.amount))
-        output_message = output_message.replace("$pointswithcurrency", PointsWithCurrency(Parent, data))
-    elif reward.name == settings.jackpot.name:
-        output_message = settings.win_jackpot_message
-        
-        output_message = output_message.replace("$username", data.UserName)
-        output_message = output_message.replace("$user", data.User)
-        output_message = output_message.replace("$roll", str(reward.roll))
-        output_message = output_message.replace("$amount", str(reward.amount))
-        output_message = output_message.replace("$pointswithcurrency", PointsWithCurrency(Parent, data))
+def SendResponse(data, amount, value, message):
+    global settings
+    
+    output_message = message
+    if message == "":
+        Parent.Log(ScriptName, "error, empty outcome message")
+        return
+    
+    output_message = output_message.replace("$user", data.User)
+    output_message = output_message.replace("$username", data.UserName)
+    output_message = output_message.replace("$amount", str(amount))
+    output_message = output_message.replace("$result", str(value))
+    output_message = output_message.replace("$points", str(Parent.GetPoints(data.User)))
+    output_message = output_message.replace("$currency", Parent.GetCurrencyName)
+    output_message = output_message.replace("$pointswithcurrency", PointsWithCurrency(data))
     
     Parent.SendStreamMessage(output_message)
     
     return
 
-def PointsWithCurrency(Parent, data):
+def PointsWithCurrency(data):
     points = Parent.GetPoints(data.User)
     currency = Parent.GetCurrencyName()
     
@@ -189,10 +121,9 @@ def PointsWithCurrency(Parent, data):
 
 #Init is a function called when the script is first loaded
 def Init():
-    global settings
-    settings = Settings()
-    cm = CaseManager("cases.json")
-    cm.ReadCases()
+    global settings, outcomes_manager
+    
+    ImportModules()
     return
 
 #Exec is a function called every time the bot gets a chat message
@@ -203,7 +134,7 @@ def Execute(data):
     global settings
     if not settings.only_live or Parent.IsLive():
         if data.IsChatMessage() and data.GetParam(0).lower() == settings.gamble_command:
-            DoGamble(Parent, data)
+            DoGamble(data)
         #elif data.IsChatMessage() and data.GetParam(0).lower() == settings.jackpot_command:
         #    Parent.SendStreamMessage(str(settings.jackpot.amount))
     return
